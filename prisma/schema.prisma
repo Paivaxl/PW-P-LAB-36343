@@ -7,6 +7,12 @@ datasource db {
   provider = "postgresql"
 }
 
+model User {
+  id       Int    @id @default(autoincrement())
+  email    String @unique
+  password String
+}
+
 model Tasks {
   id  Int   @id @default(autoincrement())
   title String

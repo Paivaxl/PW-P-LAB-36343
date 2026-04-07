@@ -4,6 +4,8 @@ import cors from 'cors'
 import dotenv from 'dotenv'
 import { PrismaPg } from "@prisma/adapter-pg";
 import pkg from '@prisma/client'
+import bcrypt from 'bcryptjs'
+import jwt from 'jsonwebtoken'
 
 dotenv.config()
 
@@ -19,13 +21,78 @@ const prisma = new PrismaClient({
 })
 
 
+const authenticateToken = (req, res, next) => {
+  const authHeader = req.header('Authorization');
+  const token = authHeader && authHeader.split(' ')[1]; // Bearer TOKEN
+
+  if (!token) return res.status(401).json({ message: 'Acesso negado' });
+
+  try {
+    const verified = jwt.verify(token, process.env.JWT_SECRET);
+    req.user = verified;
+    next();
+  } catch (err) {
+    res.status(400).json({ message: 'Token inválido' });
+  }
+};;
+
+
 let movies = [
     {id: 1, title: "Inception", year: 2010},
     {id: 2, title: "Interestellar", year: 2014}
 ];
 
 
-app.get("/movies", (req, res) => {
+app.post('/auth/signup', async (req, res) => {
+  try {
+    const { email, password } = req.body;
+
+    if (!email || !password) {
+      return res.status(400).json({ message: 'Email e senha são obrigatórios' });
+    }
+
+    const existingUser = await prisma.user.findUnique({ where: { email } });
+    if (existingUser) {
+      return res.status(400).json({ message: 'Usuário já existe' });
+    }
+
+    const hashedPassword = await bcrypt.hash(password, 10);
+    const user = await prisma.user.create({
+      data: { email, password: hashedPassword }
+    });
+
+    res.status(201).json({ message: 'Usuário criado com sucesso', user: { id: user.id, email: user.email } });
+  } catch (error) {
+    res.status(500).json({ message: 'Erro ao criar usuário', error: error.message });
+  }
+});
+
+app.post('/auth/signin', async (req, res) => {
+  try {
+    const { email, password } = req.body;
+
+    if (!email || !password) {
+      return res.status(400).json({ message: 'Email e senha são obrigatorios' });
+    }
+
+    const user = await prisma.user.findUnique({ where: { email } });
+    if (!user) {
+      return res.status(400).json({ message: 'Usuario nao encontrado' });
+    }
+
+    const isPasswordValid = await bcrypt.compare(password, user.password);
+    if (!isPasswordValid) {
+      return res.status(400).json({ message: 'Senha incorreta' });
+    }
+
+    const token = jwt.sign({ id: user.id, email: user.email }, process.env.JWT_SECRET, { expiresIn: '1h' });
+    res.status(200).json({ message: 'Login bem-sucedido', token });
+  } catch (error) {
+    res.status(500).json({ message: 'Erro ao fazer login', error: error.message });
+  }
+});
+
+app.get("/movies", authenticateToken, (req, res) => {
     if (movies.length === 0) {
         return res.status(404).json({ message: "No movies found"})
     }
@@ -33,7 +100,7 @@ app.get("/movies", (req, res) => {
        res.status(200).json(movies)
 })
 
-app.post("/movies", (req, res) => {
+app.post("/movies", authenticateToken, (req, res) => {
     const { title, year } = req.body
 
     const id = movies.length + 1
@@ -49,7 +116,7 @@ app.post("/movies", (req, res) => {
     res.status(200).json({ message: "Sucesso ao cadastrar um filme.", newMovie: newMovie})
 })
 
-app.put("/movies/:id", (req, res) => {
+app.put("/movies/:id", authenticateToken, (req, res) => {
     const { id } = req.params 
     const { title, year} = req.body
 
@@ -76,7 +143,7 @@ app.listen(PORT, () => {
     console.log(`Server is running on port ${PORT}`)
 })
 
-app.delete("/movies/:id", (req, res) => {
+app.delete("/movies/:id", authenticateToken, (req, res) => {
     const { id } = req.params
 
     const movieToDelete = movies.filter((movie) => movie.id == id)
@@ -93,7 +160,7 @@ let tasks = [
   { id: 2, title: "Fazer LAB-1", completed: true, priority: "medium" }
 ];
 
-app.get('/tasks', (req, res) => {
+app.get('/tasks', authenticateToken, (req, res) => {
 
     const { completed } = req.query
 
@@ -111,7 +178,7 @@ app.get('/tasks', (req, res) => {
     })
 })
 
-app.get('/tasks/stats', (req, res) => {
+app.get('/tasks/stats', authenticateToken, (req, res) => {
     let completedTasks = 0
     let pendentTasks = 0
 
@@ -137,7 +204,7 @@ app.get('/tasks/stats', (req, res) => {
     })
 })
 
-app.get('/tasks/:id', (req, res) => {
+app.get('/tasks/:id', authenticateToken, (req, res) => {
 
     const { 
         id
@@ -156,7 +223,7 @@ app.get('/tasks/:id', (req, res) => {
     res.status(200).json({ message: "Sucesso ao buscar tarefa", task })
 })
 
-app.post('/tasks', (req, res) => {
+app.post('/tasks', authenticateToken, (req, res) => {
 
     const tasksLenght = tasks.length
 
@@ -185,7 +252,7 @@ app.post('/tasks', (req, res) => {
     res.status(200).json({ message: "Sucesso ao adicionar task nova", updatedTasks: tasks })
 })
 
-app.put('/tasks/:id', (req, res) => {
+app.put('/tasks/:id', authenticateToken, (req, res) => {
     
     const { id } = req.params
     const { title, priority } = req.body
@@ -206,7 +273,7 @@ app.put('/tasks/:id', (req, res) => {
     res.status(200).json({ message: `Sucesso ao editar o filme de id ${id}`, updatedTasks: tasks })
 })
 
-app.patch('/tasks/:id/toggle', (req, res) => {
+app.patch('/tasks/:id/toggle', authenticateToken, (req, res) => {
     
     const { id } = req.params
 
@@ -221,7 +288,7 @@ app.patch('/tasks/:id/toggle', (req, res) => {
     res.status(200).json({ message: `Sucesso ao editar o task de id ${id}`, updatedTask: taskToEdit[0] })
 })
 
-app.delete('/tasks/:id', (req, res) => {
+app.delete('/tasks/:id', authenticateToken, (req, res) => {
 
     const { id } = req.params
 
@@ -244,7 +311,7 @@ app.listen(port, () => {
 })
 
 
-app.get('/prisma/tasks', async (req,res) => {
+app.get('/prisma/tasks', authenticateToken, async (req,res) => {
     const { completed } = req.query
     
     const iscompleted = completed === "true"    
@@ -269,7 +336,7 @@ app.get('/prisma/tasks', async (req,res) => {
     res.status(200).json({ message: "Sucesso ao buscar tarefas", tasks })
 })
 
-app.get('/prisma/tasks/:id', async (req, res) => {
+app.get('/prisma/tasks/:id', authenticateToken, async (req, res) => {
     const { id } = req.params
     const parsedId = parseInt(id)
     const task = await prisma.tasks.findUnique({
@@ -283,7 +350,7 @@ app.get('/prisma/tasks/:id', async (req, res) => {
     res.status(200).json({ message: "Sucesso ao buscar tarefa", task })
 })
 
-app.get('/prisma/tasks/stats', async (req, res) => {
+app.get('/prisma/tasks/stats', authenticateToken, async (req, res) => {
     const completedTasks = await prisma.tasks.count({
         where: {
             completed: true
@@ -297,7 +364,7 @@ app.get('/prisma/tasks/stats', async (req, res) => {
     res.status(200).json({ message: "Sucesso ao buscar estatísticas", completedTasks, pendingTasks })
 })
 
-app.post('/prisma/tasks', async (req, res) => {
+app.post('/prisma/tasks', authenticateToken, async (req, res) => {
     const { title, priority } = req.body
 
     if (!title || !priority) {
@@ -318,7 +385,7 @@ app.post('/prisma/tasks', async (req, res) => {
     res.status(200).json({ message: "Sucesso ao criar nova task", newTask })
 })  
 
-app.put('/prisma/tasks/:id', async (req, res) => {
+app.put('/prisma/tasks/:id', authenticateToken, async (req, res) => {
     const { id } = req.params
     const { title, priority } = req.body
 
@@ -339,7 +406,7 @@ app.put('/prisma/tasks/:id', async (req, res) => {
     res.status(200).json({ message: `Sucesso ao editar o task de id ${id}`, updatedTask: taskToEdit })
 })
 
-app.delete('/prisma/tasks/:id', async (req, res) => {
+app.delete('/prisma/tasks/:id', authenticateToken, async (req, res) => {
     const { id } = req.params
     const parsedId = parseInt(id)
     const taskToDelete = await prisma.tasks.findUnique({
@@ -358,7 +425,7 @@ app.delete('/prisma/tasks/:id', async (req, res) => {
     res.status(200).json({ message: "Sucesso ao deletar tarefa"})
 })
 
-app.patch('/prisma/tasks/:id/toggle', async (req, res) => {
+app.patch('/prisma/tasks/:id/toggle', authenticateToken, async (req, res) => {
     const { id } = req.params
     const parsedId = parseInt(id)
     const taskToEdit = await prisma.tasks.findUnique({
